@@ -119,8 +119,8 @@ def encode_pieces(sp_model, text, return_unicode=True, sample=False):
   return new_pieces
 
 
-def split_on_language(text, major_language='english'):
-  last_lang = False if major_language=='english' else True
+def split_on_language(text, major_language='en'):
+  last_lang = False if major_language=='en' else True
   all_text = ['']
   langs = [last_lang]
   for t in text:
@@ -137,7 +137,7 @@ def split_on_language(text, major_language='english'):
   return all_text,(langs)
 
 def encode_ids(sp, text, transliterate = False,
-                  language_tag = False, eng_id = 0, hin_id = 0, major_language='english',
+                  language_tag = False, eng_id = 0, hin_id = 0, major_language='en',
                   return_unicode = False, sample = False):
   
   if transliterate:

@@ -68,93 +68,103 @@ def format_filename_gen(prefix, bsz_per_host, seq_len, bi_data, suffix,
 
   return file_name
 
-def _create_data(idx, input_paths, transliterate=True, language_tag=True, major_language='english'):
+def _create_data(idx, all_input_paths, transliterate=True, language_tag=True, major_languages='en',
+                 batch_split=None):
   # Load sentence-piece model
   sp = spm.SentencePieceProcessor()
   sp.Load(FLAGS.sp_path)
 
-  input_shards = []
-  total_line_cnt = 0
-  for input_path in input_paths:
-    input_data, sent_ids = [], []
-    sent_id, line_cnt = True, 0
-    tf.logging.info("Processing %s", input_path)
-    for line in tf.gfile.Open(input_path):
-      if line_cnt % 100000 == 0:
-        tf.logging.info("Loading line %d", line_cnt)
-      line_cnt += 1
+  all_input_data = []
+  all_sent_ids = []
+  for i,input_paths in enumerate(all_input_paths):
+    major_language = major_languages.split(',')[i]
+    input_shards = []
+    total_line_cnt = 0
+    for input_path in input_paths:
+      input_data, sent_ids = [], []
+      sent_id, line_cnt = True, 0
+      tf.logging.info("Processing %s", input_path)
+      for line in tf.gfile.Open(input_path):
+        if line_cnt % 100000 == 0:
+          tf.logging.info("Loading line %d", line_cnt)
+        line_cnt += 1
 
-      if not line.strip():
-        if FLAGS.use_eod:
-          sent_id = not sent_id
-          cur_sent = [EOD_ID]
+        if not line.strip():
+          if FLAGS.use_eod:
+            sent_id = not sent_id
+            cur_sent = [EOD_ID]
+          else:
+            continue
         else:
-          continue
-      else:
-        if FLAGS.from_raw_text:
-          cur_sent = preprocess_text(line.strip(), lower=FLAGS.uncased)
-          cur_sent = encode_ids(sp, cur_sent,
-                               transliterate=transliterate, language_tag=language_tag,
-                               eng_id=ENG_ID, hin_id=HIN_ID, major_language=major_language)
-        else:
-          cur_sent = list(map(int, line.strip().split()))
-        if FLAGS.use_eop:
-          cur_sent.append(EOP_ID)
+          if FLAGS.from_raw_text:
+            cur_sent = preprocess_text(line.strip(), lower=FLAGS.uncased)
+            cur_sent = encode_ids(sp, cur_sent,
+                                 transliterate=transliterate, language_tag=language_tag,
+                                 eng_id=ENG_ID, hin_id=HIN_ID, major_language=major_language)
+          else:
+            cur_sent = list(map(int, line.strip().split()))
+          if FLAGS.use_eop:
+            cur_sent.append(EOP_ID)
 
-      input_data.extend(cur_sent)
-      sent_ids.extend([sent_id] * len(cur_sent))
-      sent_id = not sent_id
+        input_data.extend(cur_sent)
+        sent_ids.extend([sent_id] * len(cur_sent))
+        sent_id = not sent_id
 
-    tf.logging.info("Finish with line %d", line_cnt)
-    if line_cnt == 0:
-      continue
+      tf.logging.info("Finish with line %d", line_cnt)
+      if line_cnt == 0:
+        continue
 
-    input_data = np.array(input_data, dtype=np.int64)
-    sent_ids = np.array(sent_ids, dtype=np.bool)
+      input_data = np.array(input_data, dtype=np.int64)
+      sent_ids = np.array(sent_ids, dtype=np.bool)
 
-    total_line_cnt += line_cnt
-    input_shards.append((input_data, sent_ids))
+      total_line_cnt += line_cnt
+      input_shards.append((input_data, sent_ids))
 
-  tf.logging.info("[Task %d] Total number line: %d", idx, total_line_cnt)
+    tf.logging.info("[Task %d] Total number line: %d", idx, total_line_cnt)
 
-  tfrecord_dir = os.path.join(FLAGS.save_dir, "tfrecords")
+    tfrecord_dir = os.path.join(FLAGS.save_dir, "tfrecords")
 
-  filenames, num_batch = [], 0
+    filenames, num_batch = [], 0
 
-  # Randomly shuffle input shards (with a fixed but distinct random seed)
-  np.random.seed(100 * FLAGS.task + FLAGS.pass_id)
+    # Randomly shuffle input shards (with a fixed but distinct random seed)
+    np.random.seed(100 + FLAGS.pass_id)
 
-  perm_indices = np.random.permutation(len(input_shards))
-  tf.logging.info("Using perm indices %s for pass %d",
-                  perm_indices.tolist(), FLAGS.pass_id)
-  
+    perm_indices = np.random.permutation(len(input_shards))
+    tf.logging.info("Using perm indices %s for pass %d",
+                    perm_indices.tolist(), FLAGS.pass_id)
+    
 
-  input_data_list, sent_ids_list = [], []
-  prev_sent_id = None
-  for perm_idx in perm_indices:
-    input_data, sent_ids = input_shards[perm_idx]
-    # make sure the `send_ids[0] == not prev_sent_id`
-    if prev_sent_id is not None and sent_ids[0] == prev_sent_id:
-      sent_ids = np.logical_not(sent_ids)
+    input_data_list, sent_ids_list = [], []
+    prev_sent_id = None
+    for perm_idx in perm_indices:
+      input_data, sent_ids = input_shards[perm_idx]
+      # make sure the `send_ids[0] == not prev_sent_id`
+      if prev_sent_id is not None and sent_ids[0] == prev_sent_id:
+        sent_ids = np.logical_not(sent_ids)
 
-    # append to temporary list
-    input_data_list.append(input_data)
-    sent_ids_list.append(sent_ids)
+      # append to temporary list
+      input_data_list.append(input_data)
+      sent_ids_list.append(sent_ids)
 
-    # update `prev_sent_id`
-    prev_sent_id = sent_ids[-1]
+      # update `prev_sent_id`
+      prev_sent_id = sent_ids[-1]
 
-  input_data = np.concatenate(input_data_list)
-  sent_ids = np.concatenate(sent_ids_list)
+    input_data = np.concatenate(input_data_list)
+    sent_ids = np.concatenate(sent_ids_list)
+
+    all_input_data.append(input_data)
+    all_sent_ids.append(sent_ids)
 
   file_name, cur_num_batch = create_tfrecords(
       save_dir=tfrecord_dir,
       basename="{}-{}-{}".format(FLAGS.split, idx, FLAGS.pass_id),
-      data=[input_data, sent_ids],
+      data=[(input_data, sent_ids) 
+                for input_data,sent_ids in zip(all_input_data,all_sent_ids)],
       bsz_per_host=FLAGS.bsz_per_host,
       seq_len=FLAGS.seq_len,
       bi_data=FLAGS.bi_data,
       sp=sp,
+      batch_split=batch_split
   )
 
   filenames.append(file_name)
@@ -174,6 +184,20 @@ def create_data(_):
   if not FLAGS.use_tpu:
     FLAGS.num_core_per_host = 1  # forced to be one
 
+  #=======FLAGS validity assertions==================
+  num_langs = len(FLAGS.major_languages.split(','))
+  assert len(FLAGS.input_globs.split(','))==num_langs
+  if FLAGS.batch_split is None:
+    assert FLAGS.bsz_per_host%num_langs==0, "Please provide a valid batch_split"\
+          +" got {} num langs, {} bsz".format(num_langs, bsz_per_host)
+  else:
+    try:
+      FLAGS.batch_split = list(map(int,FLAGS.batch_split.split(',')))
+    except ValueError:
+      raise Exception(f"batch_split should be comma separated int,"
+                      f" got {FLAGS.batch_split}")
+  #==================================================
+
   # Make workdirs
   if not tf.gfile.Exists(FLAGS.save_dir):
     tf.gfile.MakeDirs(FLAGS.save_dir)
@@ -182,9 +206,8 @@ def create_data(_):
   if not tf.gfile.Exists(tfrecord_dir):
     tf.gfile.MakeDirs(tfrecord_dir)
 
-  # Create and dump corpus_info from task 0
-  if FLAGS.task == 0:
-    corpus_info = {
+  # Create and dump corpus_info
+  corpus_info = {
         "vocab_size": VOCAB_SIZE,
         "bsz_per_host": FLAGS.bsz_per_host,
         "num_core_per_host": FLAGS.num_core_per_host,
@@ -194,35 +217,30 @@ def create_data(_):
         "use_eod": FLAGS.use_eod,
         "use_eop": FLAGS.use_eop,
         "sp_path": FLAGS.sp_path,
-        "input_glob": FLAGS.input_glob,
+        "input_globs": FLAGS.input_globs,
+        "major_languages": FLAGS.major_languages,
+        "batch_split": FLAGS.batch_split
     }
-    corpus_info_path = os.path.join(FLAGS.save_dir, "corpus_info.json")
-    with tf.gfile.Open(corpus_info_path, "w") as fp:
-      json.dump(corpus_info, fp)
+  corpus_info_path = os.path.join(FLAGS.save_dir, "corpus_info.json")
+  with tf.gfile.Open(corpus_info_path, "w") as fp:
+    json.dump(corpus_info, fp)
 
-  # Interleavely split the work into FLAGS.num_task splits
-  file_paths = sorted(tf.gfile.Glob(FLAGS.input_glob))
-  tf.logging.info("Use glob: %s", FLAGS.input_glob)
-  tf.logging.info("Find %d files: %s", len(file_paths), file_paths)
-
-  task_file_paths = file_paths[FLAGS.task::FLAGS.num_task]
-  if not task_file_paths:
-    tf.logging.info("Exit: task %d has no file to process.", FLAGS.task)
-    return
-
-  tf.logging.info("Task %d process %d files: %s",
-                  FLAGS.task, len(task_file_paths), task_file_paths)
+  input_globs = FLAGS.input_globs.split(',')
+  file_paths = [sorted(tf.gfile.Glob(input_glob)) for input_glob in input_globs]
+  tf.logging.info("Use globs: %s", FLAGS.input_globs)
+  tf.logging.info("Find %d files: %s", sum(map(len,file_paths)), file_paths)
 
   if FLAGS.bi_data:
     tf.logging.info("Using bi data")
 
-  record_info = _create_data(FLAGS.task, task_file_paths, 
+  record_info = _create_data(0, file_paths, 
                              transliterate=FLAGS.transliterate, 
                              language_tag=FLAGS.language_tag,
-                             major_language=FLAGS.major_language)
+                             major_languages=FLAGS.major_languages,
+                             batch_split=FLAGS.batch_split)
 
   record_prefix = "record_info-{}-{}-{}".format(
-      FLAGS.split, FLAGS.task, FLAGS.pass_id)
+      FLAGS.split, 0, FLAGS.pass_id)
   record_name = format_filename_gen(
       prefix=record_prefix,
       bsz_per_host=FLAGS.bsz_per_host,
@@ -230,35 +248,90 @@ def create_data(_):
       bi_data=FLAGS.bi_data,
       suffix="json",
       uncased=FLAGS.uncased)
+
   record_info_path = os.path.join(tfrecord_dir, record_name)
 
   with tf.gfile.Open(record_info_path, "w") as fp:
     json.dump(record_info, fp)
 
 
-def batchify(data, bsz_per_host, sent_ids=None):
-  num_step = len(data) // bsz_per_host
-  data = data[:bsz_per_host * num_step]
-  data = data.reshape(bsz_per_host, num_step)
-  if sent_ids is not None:
-    sent_ids = sent_ids[:bsz_per_host * num_step]
-    sent_ids = sent_ids.reshape(bsz_per_host, num_step)
+def batchify(data, bsz_per_host, sent_ids=None, multi=False, batch_split=None):
+  if multi:
+    data_arr = data
+    sent_ids_arr = sent_ids
 
-  if sent_ids is not None:
-    return data, sent_ids
-  return data
+    if batch_split is None:
+      batch_split = [bsz_per_host//len(data_arr)]*len(data_arr)
+
+    all_data = []
+    all_sents = []
+    for i,data in enumerate(data_arr):
+      num_step = len(data) // batch_split[i]
+      data = data[:batch_split[i] * num_step]
+      data = data.reshape(batch_split[i], num_step)
+      if sent_ids_arr is not None:
+        sent_ids = sent_ids_arr[i]
+        if sent_ids is not None:
+          sent_ids = sent_ids[:batch_split[i] * num_step]
+          sent_ids = sent_ids.reshape(batch_split[i], num_step) 
+        else:
+          sent_ids = None
+      else:
+        sent_ids = None 
+
+      all_data.append(data)
+      all_sents.append(sent_ids)
+
+    # We will repeat the batches which are shorter than max
+    while True:
+      max_length = max(map(lambda x: x.shape[1],all_data))
+      all_fine = all(map(lambda x: x.shape[-1]==max_length,all_data))
+      if all_fine:
+        break
+      for i in range(len(all_data)):
+        to_repeat = max_length - all_data[i].shape[-1]
+        if to_repeat==0: continue
+        all_data[i] = np.concatenate([all_data[i],all_data[i][:,:to_repeat]],axis=-1)
+        if all_sents[i] is not None:
+          all_sents[i] = np.concatenate([all_sents[i],all_sents[i][:,:to_repeat]],axis=-1)
+
+    data = np.concatenate(all_data,axis=0)
+    if all_sents[0] is not None:
+      sent_ids = np.concatenate(all_sents,axis=0)
+      return data, sent_ids
+    return data
+  else:
+    num_step = len(data) // bsz_per_host
+    data = data[:bsz_per_host * num_step]
+    data = data.reshape(bsz_per_host, num_step)
+    if sent_ids is not None:
+      sent_ids = sent_ids[:bsz_per_host * num_step]
+      sent_ids = sent_ids.reshape(bsz_per_host, num_step)
+
+    if sent_ids is not None:
+      return data, sent_ids
+    return data
 
 
 
 
 def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
-                     bi_data, sp):
-  data, sent_ids = data[0], data[1]
+                     bi_data, sp, batch_split=None):
+  if len(data)==1:
+    data, sent_ids = data[0], data[1]
+    multi = False
+  else:
+    sent_ids = [d[1] for d in data]
+    data = [d[0] for d in data]
+    multi = True
 
   num_core = FLAGS.num_core_per_host
   bsz_per_core = bsz_per_host // num_core
 
   if bi_data:
+    if multi:
+      raise Exception("Bi data not supported in multi training")
+
     assert bsz_per_host % (2 * FLAGS.num_core_per_host) == 0
     fwd_data, fwd_sent_ids = batchify(data, bsz_per_host // 2, sent_ids)
 
@@ -273,7 +346,8 @@ def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
     sent_ids = np.concatenate(
         [fwd_sent_ids, bwd_sent_ids], 1).reshape(bsz_per_host, -1)
   else:
-    data, sent_ids = batchify(data, bsz_per_host, sent_ids)
+    data, sent_ids = batchify(data, bsz_per_host, sent_ids, 
+                              multi=multi, batch_split=batch_split)
 
   tf.logging.info("Raw data shape %s.", data.shape)
 
@@ -549,8 +623,11 @@ if __name__ == "__main__":
                     help="whether to append EOP afte each para.")
   flags.DEFINE_bool("from_raw_text", True,
                     help="Whether the input is raw text or encoded ids.")
-  flags.DEFINE_string("input_glob", "data/example/*.txt",
-                      help="Input file glob.")
+  flags.DEFINE_string("input_globs", "lang1/example/*.txt,lang2/example/*.txt",
+                      help="Comma separated globs for various languages")
+  flags.DEFINE_string("batch_split", None,
+                      help="Number of instance in a batch for each language. "
+                      "Comma separted ints or None for equal split")
   flags.DEFINE_string("sp_path", "", help="Path to the sentence piece model.")
   flags.DEFINE_string("save_dir", "proc_data/example",
                       help="Directory for saving the processed data.")
@@ -558,16 +635,11 @@ if __name__ == "__main__":
                     help="Save the data as which split.")
   flags.DEFINE_integer("pass_id", 0, help="ID of the current pass."
                        "Different passes sample different negative segment.")
-  flags.DEFINE_integer("num_task", 1, help="Number of total tasks.")
-  flags.DEFINE_integer("task", 0, help="The Task ID. This value is used when "
-                       "using multiple workers to identify each worker.")
-  flags.DEFINE_bool("eval", True,
-                    help="In evaluation mode.")
   flags.DEFINE_bool("transliterate", True,
                     help="Transliterate to hindi.")
   flags.DEFINE_bool("language_tag", True,
                     help="Use language special symbol.")
-  flags.DEFINE_string("major_language", 'english',
-                    help="Major document lang english/hindi.")
+  flags.DEFINE_string("major_languages", 'en',
+                    help="Major document lang english/hindi for each input_glob.")
   tf.logging.set_verbosity(tf.logging.INFO)
   tf.app.run(create_data)
