@@ -143,7 +143,8 @@ def split_on_language(text, major_language=None):
       all_text.append(t)
       langs.append(lang)
       last_lang = lang
-
+  if len(langs)==0:
+    langs = [None]
   return all_text,(langs)
 
 def encode_ids(sp, text, transliterate = False,
@@ -164,9 +165,10 @@ def encode_ids(sp, text, transliterate = False,
     transids = [[sp.PieceToId(piece) for piece in pieces] for pieces in transpieces]
 
     if language_tag:
-      langs = [hin_id if l else eng_id for l in langs]
+      langs = [hin_id if l else eng_id if l is not None else None for l in langs]
       for i in range(len(transids)):
-        transids[i].insert(0,langs[i])
+        if langs[i] is not None:
+          transids[i].insert(0,langs[i])
     transids = [x for t in transids for x in t]
     return transids
   else:
