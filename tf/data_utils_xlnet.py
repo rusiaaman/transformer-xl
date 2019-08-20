@@ -68,7 +68,7 @@ def format_filename_gen(prefix, bsz_per_host, seq_len, bi_data, suffix,
 
   return file_name
 
-def _create_data(idx, all_input_paths, transliterate=True, language_tag=True, major_languages='en',
+def _create_data(idx, all_input_paths, transliterate=True, language_tag=True,
                  batch_split=None):
   # Load sentence-piece model
   sp = spm.SentencePieceProcessor()
@@ -77,7 +77,6 @@ def _create_data(idx, all_input_paths, transliterate=True, language_tag=True, ma
   all_input_data = []
   all_sent_ids = []
   for i,input_paths in enumerate(all_input_paths):
-    major_language = major_languages.split(',')[i]
     input_shards = []
     total_line_cnt = 0
     for input_path in input_paths:
@@ -100,7 +99,7 @@ def _create_data(idx, all_input_paths, transliterate=True, language_tag=True, ma
             cur_sent = preprocess_text(line.strip(), lower=FLAGS.uncased)
             cur_sent = encode_ids(sp, cur_sent,
                                  transliterate=transliterate, language_tag=language_tag,
-                                 eng_id=ENG_ID, hin_id=HIN_ID, major_language=major_language)
+                                 eng_id=ENG_ID, hin_id=HIN_ID)
           else:
             cur_sent = list(map(int, line.strip().split()))
           if FLAGS.use_eop:
@@ -185,18 +184,20 @@ def create_data(_):
     FLAGS.num_core_per_host = 1  # forced to be one
 
   #=======FLAGS validity assertions==================
-  num_langs = len(FLAGS.major_languages.split(','))
-  assert len(FLAGS.input_globs.split(','))==num_langs
-  if FLAGS.batch_split is None:
-    assert FLAGS.bsz_per_host%num_langs==0, "Please provide a valid batch_split"\
-          +" got {} num langs, {} bsz".format(num_langs, bsz_per_host)
-  else:
-    try:
-      FLAGS.batch_split = list(map(int,FLAGS.batch_split.split(',')))
-    except ValueError:
-      raise Exception(f"batch_split should be comma separated int,"
-                      f" got {FLAGS.batch_split}")
-  #==================================================
+  if len(FLAGS.input_globs.split(','))>1:
+    assert FLAGS.languages is not None
+    num_langs = len(FLAGS.languages.split(','))
+    assert len(FLAGS.input_globs.split(','))==num_langs
+    if FLAGS.batch_split is None:
+      assert FLAGS.bsz_per_host%num_langs==0, "Please provide a valid batch_split"\
+            +" got {} num langs, {} bsz".format(num_langs, bsz_per_host)
+    else:
+      try:
+        FLAGS.batch_split = list(map(int,FLAGS.batch_split.split(',')))
+      except ValueError:
+        raise Exception(f"batch_split should be comma separated int,"
+                        f" got {FLAGS.batch_split}")
+    #==================================================
 
   # Make workdirs
   if not tf.gfile.Exists(FLAGS.save_dir):
@@ -218,7 +219,7 @@ def create_data(_):
         "use_eop": FLAGS.use_eop,
         "sp_path": FLAGS.sp_path,
         "input_globs": FLAGS.input_globs,
-        "major_languages": FLAGS.major_languages,
+        "languages": FLAGS.languages,
         "batch_split": FLAGS.batch_split
     }
   corpus_info_path = os.path.join(FLAGS.save_dir, "corpus_info.json")
@@ -236,7 +237,6 @@ def create_data(_):
   record_info = _create_data(0, file_paths, 
                              transliterate=FLAGS.transliterate, 
                              language_tag=FLAGS.language_tag,
-                             major_languages=FLAGS.major_languages,
                              batch_split=FLAGS.batch_split)
 
   record_prefix = "record_info-{}-{}-{}".format(
@@ -318,7 +318,7 @@ def batchify(data, bsz_per_host, sent_ids=None, multi=False, batch_split=None):
 def create_tfrecords(save_dir, basename, data, bsz_per_host, seq_len,
                      bi_data, sp, batch_split=None):
   if len(data)==1:
-    data, sent_ids = data[0], data[1]
+    data, sent_ids = data[0]
     multi = False
   else:
     sent_ids = [d[1] for d in data]
@@ -639,7 +639,7 @@ if __name__ == "__main__":
                     help="Transliterate to hindi.")
   flags.DEFINE_bool("language_tag", True,
                     help="Use language special symbol.")
-  flags.DEFINE_string("major_languages", 'en',
-                    help="Major document lang english/hindi for each input_glob.")
+  flags.DEFINE_string("languages", None,
+                    help="languages in multi training. Leave none for single language")
   tf.logging.set_verbosity(tf.logging.INFO)
   tf.app.run(create_data)
