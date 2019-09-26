@@ -11,6 +11,7 @@ import re
 from tqdm import tqdm
 import absl.logging as _logging  # pylint: disable=unused-import
 import tensorflow as tf
+# tf.enable_eager_execution()
 import sentencepiece as spm
 import collections
 
@@ -246,6 +247,9 @@ def prediction_graph():
         "input": tf.placeholder(tf.int32, (None, None)),
         "input_mask":  tf.placeholder(tf.float32, (None, None))
     }
+    # features = {"input":tf.constant([[231,512,44,22]],tf.int32),
+    #             "input_mask":tf.constant([[1,1,1,1]],tf.float32)}
+
     batch_size = tf.shape(features['input'])[0]
     input_tensor = features['input']
 
@@ -254,10 +258,16 @@ def prediction_graph():
     target_mask = tf.ones((tf.shape(input_tensor)[0],1))
     _,mems = get_logits(input_tensor,mems=None,input_mask=input_mask,
                              target_mask=target_mask)
+
+        
+    mems = {i:tf.transpose(mems[i],[1,0,2]) if i<len(mems)-1 else \
+                  tf.transpose(mems[i],[1,0])
+                  for i in range(len(mems))}
     # logits = tf.reshape(logits,(batch_size,1,-1))
     # latest_toks,latest_confs = sample_token(logits) 
     # all_confs = latest_confs
     # all_toks = latest_toks
+
 
     def symbols_to_logits_fn(toks,_,mems):
         # We need only last token
@@ -278,9 +288,6 @@ def prediction_graph():
     lang_id = ENG_ID if FLAGS.tgt_lang=="english" else HIN_ID
     initial_ids = tf.ones((batch_size),dtype=tf.int32)*lang_id
 
-    mems = {i:tf.transpose(mems[i],[1,0,2]) if i<len(mems)-1 else \
-              tf.transpose(mems[i],[1,0])
-              for i in range(len(mems))}
 
     decoded_ids, scores = beam_search.sequence_beam_search(
     symbols_to_logits_fn, initial_ids, mems, FLAGS.n_token, FLAGS.beam_size,

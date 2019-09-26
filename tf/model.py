@@ -27,14 +27,14 @@ def positionwise_FF(inp, d_model, d_inner, dropout, kernel_initializer,
     output = tf.contrib.layers.layer_norm(output + inp, begin_norm_axis=-1)
   return output
 
-
-def rel_shift(x):
+def rel_shift(x, klen=-1):
+  """perform relative shift to form the relative attention score."""
   x_size = tf.shape(x)
 
-  x = tf.pad(x, [[0, 0], [1, 0], [0, 0], [0, 0]])
-  x = tf.reshape(x, [x_size[1] + 1, x_size[0], x_size[2], x_size[3]])
+  x = tf.reshape(x, [x_size[1], x_size[0], x_size[2], x_size[3]])
   x = tf.slice(x, [1, 0, 0, 0], [-1, -1, -1, -1])
-  x = tf.reshape(x, x_size)
+  x = tf.reshape(x, [x_size[0], x_size[1] - 1, x_size[2], x_size[3]])
+  x = tf.slice(x, [0, 0, 0, 0], [-1, klen, -1, -1])
 
   return x
 
@@ -71,7 +71,8 @@ def rel_multihead_attn(w, r, r_w_bias, r_r_bias, attn_mask, mems, d_model,
 
     AC = tf.einsum('ibnd,jbnd->ijbn', rw_head_q, w_head_k)
     BD = tf.einsum('ibnd,jnd->ijbn', rr_head_q, r_head_k)
-    BD = rel_shift(BD)
+    
+    BD = rel_shift(BD, klen=tf.shape(AC)[1])
 
     attn_score = (AC + BD) * scale
     attn_mask_t = attn_mask[:,:,:,None]
@@ -508,6 +509,55 @@ def _create_mask(qlen, mlen, batch_size, same_length=False, target_mask=None,
 
     return ret
 
+
+def relative_positional_encoding(qlen, klen, d_model, clamp_len, attn_type,
+                                 bi_data, bsz=None, dtype=None):
+  """create relative positional encoding."""
+  freq_seq = tf.range(0, d_model, 2.0)
+  if dtype is not None and dtype != tf.float32:
+    freq_seq = tf.cast(freq_seq, dtype=dtype)
+  inv_freq = 1 / (10000 ** (freq_seq / d_model))
+
+  if attn_type == 'bi':
+    # beg, end = klen - 1, -qlen
+    beg, end = klen, -qlen
+  elif attn_type == 'uni':
+    # beg, end = klen - 1, -1
+    beg, end = klen, -1
+  else:
+    raise ValueError('Unknown `attn_type` {}.'.format(attn_type))
+
+  if bi_data:
+    fwd_pos_seq = tf.range(beg, end, -1.0)
+    bwd_pos_seq = tf.range(-beg, -end, 1.0)
+
+    if dtype is not None and dtype != tf.float32:
+      fwd_pos_seq = tf.cast(fwd_pos_seq, dtype=dtype)
+      bwd_pos_seq = tf.cast(bwd_pos_seq, dtype=dtype)
+
+    if clamp_len > 0:
+      fwd_pos_seq = tf.clip_by_value(fwd_pos_seq, -clamp_len, clamp_len)
+      bwd_pos_seq = tf.clip_by_value(bwd_pos_seq, -clamp_len, clamp_len)
+
+    if bsz is not None:
+      fwd_pos_emb = positional_embedding(fwd_pos_seq, inv_freq, bsz//2)
+      bwd_pos_emb = positional_embedding(bwd_pos_seq, inv_freq, bsz//2)
+    else:
+      fwd_pos_emb = positional_embedding(fwd_pos_seq, inv_freq)
+      bwd_pos_emb = positional_embedding(bwd_pos_seq, inv_freq)
+
+    pos_emb = tf.concat([fwd_pos_emb, bwd_pos_emb], axis=1)
+  else:
+    fwd_pos_seq = tf.range(beg, end, -1.0)
+    if dtype is not None and dtype != tf.float32:
+      fwd_pos_seq = tf.cast(fwd_pos_seq, dtype=dtype)
+    if clamp_len > 0:
+      fwd_pos_seq = tf.clip_by_value(fwd_pos_seq, -clamp_len, clamp_len)
+    pos_emb = positional_embedding(fwd_pos_seq, inv_freq, bsz)
+
+  return pos_emb
+
+
 def _cache_mem(curr_out, prev_mem, mem_len=None):
   if mem_len is None or prev_mem is None:
     new_mem = curr_out
@@ -583,11 +633,11 @@ def transformer(dec_inp, target, mems, n_token, n_layer, d_model, d_embed,
                              tgt_len=tgt_len,
                              mem_mask=mems[-1])
     
-    pos_seq = tf.range(klen - 1, -1, -1.0)
-    if clamp_len > 0:
-      pos_seq = tf.minimum(pos_seq, clamp_len)
-    inv_freq = 1 / (10000 ** (tf.range(0, d_model, 2.0) / d_model))
-    pos_emb = positional_embedding(pos_seq, inv_freq)
+
+    pos_emb = relative_positional_encoding(qlen,klen,d_model,
+                             clamp_len=clamp_len,
+                             attn_type='bi',
+                             bi_data=False)
 
     output = tf.layers.dropout(embeddings, dropout, training=is_training)
     pos_emb = tf.layers.dropout(pos_emb, dropout, training=is_training)
