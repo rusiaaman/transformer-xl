@@ -96,9 +96,11 @@ def _create_data(idx, src_file, tgt_file, src_lang, tgt_lang,
       src_sent = preprocess_text(src_line.strip(), lower=FLAGS.uncased)
       tgt_sent = preprocess_text(tgt_line.strip(), lower=FLAGS.uncased)
       src_sent = encode_ids(sp, src_sent,
-                           transliterate=transliterate, language_tag=False)
+                           transliterate=transliterate, language_tag=language_tag,
+                           eng_id=ENG_ID, hin_id=HIN_ID)
       tgt_sent = encode_ids(sp, tgt_sent,
-                           transliterate=transliterate, language_tag=False)
+                           transliterate=transliterate, language_tag=language_tag,
+                           eng_id=ENG_ID, hin_id=HIN_ID)
       tgt_sent = tgt_sent+[EOS_ID]
       tgt_sent_input = tgt_sent[:-1]
       tgt_sent_output = tgt_sent
@@ -107,15 +109,13 @@ def _create_data(idx, src_file, tgt_file, src_lang, tgt_lang,
       tgt_sent_output = tgt_sent_output[:FLAGS.tgt_len]
       tgt_sent_input  = tgt_sent_input[:FLAGS.tgt_len]
 
-      if FLAGS.language_tag:
-        src_id = ENG_ID if src_lang=="english" else HIN_ID
-        tgt_id = ENG_ID if tgt_lang=="english" else HIN_ID
-        src_sent_e = [src_id]+src_sent
-        tgt_sent_input = [tgt_id]+tgt_sent_input
 
       if FLAGS.use_sos:
-        src_sent_e = [SOS_ID]+src_sent_e
+        src_sent_e = [SOS_ID]+src_sent
         tgt_sent_input = [SOS_ID]+tgt_sent_input
+      else:
+        src_sent_e = src_sent
+        tgt_sent_input = tgt_sent
 
       input_len = len(src_sent_e)+len(tgt_sent_input)+1 #One extra for EOS after source
       if input_len>FLAGS.seq_len:
@@ -165,7 +165,6 @@ def _create_data(idx, src_file, tgt_file, src_lang, tgt_lang,
   tf.logging.info("[Task %d] Total number line: %d", idx, total_line_cnt)
 
   tfrecord_dir = os.path.join(FLAGS.save_dir, "tfrecords")
-
   file_name, num_batch = create_tfrecords(
       save_dir=tfrecord_dir,
       basename="{}-{}-{}".format(FLAGS.split, idx, FLAGS.pass_id),

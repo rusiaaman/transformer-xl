@@ -119,25 +119,36 @@ def encode_pieces(sp_model, text, return_unicode=True, sample=False):
   return new_pieces
 
 
-def split_on_language(text, major_language='english'):
-  last_lang = False if major_language=='english' else True
+def split_on_language(text, major_language=None):
+  if major_language is None:
+    last_lang = None
+  else:
+    last_lang = False if major_language=='en' else True
   all_text = ['']
-  langs = [last_lang]
+  if last_lang is None:
+    langs = []
+  else:
+    langs = [last_lang]
   for t in text:
     lang = True if is_hindi(t) else False if is_english(t) else None
     if lang is None:
+      # For punctuations
       all_text[-1]+=t
-    elif lang==last_lang:
+    elif lang==last_lang or len(langs)==0:
       all_text[-1]+=t
+      if len(langs)==0:
+        langs.append(lang)
+        last_lang = lang
     else:
       all_text.append(t)
       langs.append(lang)
       last_lang = lang
-
+  if len(langs)==0:
+    langs = [None]
   return all_text,(langs)
 
 def encode_ids(sp, text, transliterate = False,
-                  language_tag = False, eng_id = 0, hin_id = 0, major_language='english',
+                  language_tag = False, eng_id = 0, hin_id = 0,
                   return_unicode = False, sample = False):
   
   if transliterate:
@@ -146,7 +157,7 @@ def encode_ids(sp, text, transliterate = False,
     text = unicodedata.normalize("NFKC",text)
     for sub,tosub in SUBSTITUTES.items():
       text = text.replace(sub,tosub)
-    dats,langs = split_on_language(text,major_language=major_language)
+    dats,langs = split_on_language(text)
     trans = list(map(lambda x: its.to_itrans(x,'hi') if x.strip() else '',dats))
     enfn = partial(encode_pieces,return_unicode=return_unicode,
                       sample=sample)
@@ -154,9 +165,10 @@ def encode_ids(sp, text, transliterate = False,
     transids = [[sp.PieceToId(piece) for piece in pieces] for pieces in transpieces]
 
     if language_tag:
-      langs = [hin_id if l else eng_id for l in langs]
+      langs = [hin_id if l else eng_id if l is not None else None for l in langs]
       for i in range(len(transids)):
-        transids[i].insert(0,langs[i])
+        if langs[i] is not None:
+          transids[i].insert(0,langs[i])
     transids = [x for t in transids for x in t]
     return transids
   else:
