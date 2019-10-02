@@ -462,7 +462,7 @@ def mul_adaptive_logsoftmax(hidden, target, n_token, d_embed, d_proj, cutoffs,
 
 def _create_mask(qlen, mlen, batch_size, same_length=False, target_mask=None, 
                    bidirectional_mask=False,input_mask=None,tf_float=tf.float32,tgt_len=None,
-                   mem_mask = None):
+                   mem_len=0, mem_mask = None):
     """If bidirectional_mask and If target mask is available, we let all non target tokens attend
     each other.
     target_mask: None or [tgt_len,bsz], where tgt_len is target length. tgt_len<qlen. 1s for target tokens
@@ -489,7 +489,7 @@ def _create_mask(qlen, mlen, batch_size, same_length=False, target_mask=None,
     mask_u = tf.matrix_band_part(attn_mask, 0, -1)
     mask_dia = tf.matrix_band_part(attn_mask, 0, 0)
     attn_mask_pad = tf.zeros([batch_size, qlen, mlen],dtype=tf_float)
-    if mem_mask is not None:
+    if mem_mask is not None and mem_len>0:
       attn_mask_pad+=(1.0 - tf.transpose(mem_mask)[:,None,:])
     ret = tf.concat([attn_mask_pad, mask_u - mask_dia], -1)
 
@@ -631,7 +631,8 @@ def transformer(dec_inp, target, mems, n_token, n_layer, d_model, d_embed,
                              target_mask=target_mask,
                              input_mask=input_mask,
                              tgt_len=tgt_len,
-                             mem_mask=mems[-1])
+                             mem_mask=mems[-1],
+                             mem_len=mem_len)
     
 
     pos_emb = relative_positional_encoding(qlen,klen,d_model,
@@ -674,7 +675,6 @@ def transformer(dec_inp, target, mems, n_token, n_layer, d_model, d_embed,
 
     logsoftmax_fn = (mul_adaptive_logsoftmax if use_tpu else
                      mask_adaptive_logsoftmax)
-
     maybe_loss_or_logit = logsoftmax_fn(
           hidden=output,
           target=target,
