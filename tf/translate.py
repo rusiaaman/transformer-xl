@@ -364,7 +364,8 @@ def main():
     def tokenize_fn(text):
         text = preprocess_text(text, lower=FLAGS.uncased)
         text = encode_ids(sp, text,
-                           transliterate=FLAGS.transliterate, language_tag=True)
+                           transliterate=FLAGS.transliterate, language_tag=True,
+                           eng_id=ENG_ID, hin_id=HIN_ID)
         return text
 
 
