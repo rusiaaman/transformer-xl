@@ -122,15 +122,8 @@ def get_preprocessor(examples, tokenize_fn):
             maxlen = max(map(len,tokens_batched))
             for tokens in tokens_batched:
                 pad_len = maxlen-len(tokens)
-
-                src_id = ENG_ID if FLAGS.src_lang=="english" else HIN_ID
-                src_id = [src_id]
-                if FLAGS.use_sos:
-                    src_id = [SOS_ID] + src_id
+                src_id = [SOS_ID]
                 ids = src_id + tokens + [EOS_ID]
-
-                if FLAGS.use_sos:
-                    ids = ids + [SOS_ID]
                 
                 masks = [0]*pad_len+[1]*len(ids)
                 ids = [PAD_ID]*pad_len+ids
@@ -285,8 +278,7 @@ def prediction_graph():
                       tf.transpose(mems[i],[1,0])
                       for i in range(len(mems))}
     
-    lang_id = ENG_ID if FLAGS.tgt_lang=="english" else HIN_ID
-    initial_ids = tf.ones((batch_size),dtype=tf.int32)*lang_id
+    initial_ids = tf.ones((batch_size),dtype=tf.int32)*SOS_ID
 
 
     decoded_ids, scores = beam_search.sequence_beam_search(
@@ -372,7 +364,7 @@ def main():
     def tokenize_fn(text):
         text = preprocess_text(text, lower=FLAGS.uncased)
         text = encode_ids(sp, text,
-                           transliterate=FLAGS.transliterate, language_tag=False)
+                           transliterate=FLAGS.transliterate, language_tag=True)
         return text
 
 
