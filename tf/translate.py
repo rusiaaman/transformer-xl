@@ -104,6 +104,10 @@ parser.add_argument("--spiece_model_file", default="",
 parser.add_argument("--input_file", default="",
                     help="File containing prompts separated by empty new line "
                     "for conditional sampling")
+parser.add_argument("--output_dir",default='prediction',
+                    help="output dir for saving predicted results"
+                    "if input file is provided. Doesn't apply to interactive",
+                    type=str)
 
 # prediction
 parser.add_argument(
@@ -169,8 +173,7 @@ def get_input_dataset(preprocessor,batch_size):
 
     dataset = tf.data.Dataset.from_generator(preprocessor,
                                              output_types={'input':tf.int32,
-                                             'input_mask':tf.float32},
-                                             output_shapes={'input':tf.TensorShape((FLAGS.seq_len,)), 'input_mask':tf.TensorShape((FLAGS.seq_len, ))})
+                                             'input_mask':tf.float32})
     dataset = dataset.batch(batch_size,
                             drop_remainder=False)
     dataset.prefetch(1)
@@ -547,7 +550,9 @@ def main():
         tf.logging.info("Got %s lines in the input file",
                         len(texts))
         outputs = predict(texts)
-        with open(os.path.join(FLAGS.input_file+".xlnet"),'w') as f:
+        if not os.path.exists(FLAGS.output_dir):
+            os.makedirs(FLAGS.output_dir)
+        with open(os.path.join(FLAGS.output_dir,FLAGS.input_file),'w') as f:
             for i in range(0,len(texts)):
                 output,_ = next(outputs)
                 out = parse_ids(output.tolist())
