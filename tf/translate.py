@@ -552,7 +552,8 @@ def main():
         outputs = predict(texts)
         if not os.path.exists(FLAGS.output_dir):
             os.makedirs(FLAGS.output_dir)
-        with open(os.path.join(FLAGS.output_dir,FLAGS.input_file),'w') as f:
+        with open(os.path.join(FLAGS.output_dir,
+            os.path.basename(FLAGS.input_file)),'w') as f:
             for i in range(0,len(texts)):
                 output,_ = next(outputs)
                 out = parse_ids(output.tolist())
