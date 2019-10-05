@@ -176,6 +176,24 @@ def get_input_dataset(preprocessor,batch_size):
     dataset.prefetch(1)
     return dataset
 
+def get_tpu_input_dataset(examples,tokenize_fn,batch_size):
+    
+    # remainder = len(examples)%batch_size
+    # examples = examples + [examples[-1]]*remainder
+    maxm = FLAGS.seq_len
+    ids = list(map(tokenize_fn,examples))
+    ids = [[SOS_ID]+i+[EOS_ID] for i in ids]
+
+    masks = [[0]*max(0,maxm-len(d))+[1]*len(d) for d in ids]
+    ids = [[PAD_ID]*max(0,maxm-len(d))+d for d in ids]
+    
+    ids_tensors = [tf.constant(d[:maxm],dtype=tf.int32) for d in ids]
+    masks_tensors = [tf.constant(m[:maxm],dtype=tf.float32) for m in masks]
+    dataset = tf.data.Dataset.from_tensor_slices({'input':ids,
+                                            'input_mask':masks_tensors})
+    dataset = dataset.batch(batch_size)
+    dataset.prefetch(1)
+    return dataset
 
 def get_logits(input_ids,mems,input_mask,target_mask):
     """Builds the graph for calculating the final logits"""
@@ -255,6 +273,8 @@ def get_logits(input_ids,mems,input_mask,target_mask):
 
 
 def cache_fn(batch_size):
+    if not FLAGS.use_tpu:
+      return None
     mem_len = FLAGS.seq_len+FLAGS.max_decode_length
     mems = []
     for l in range(FLAGS.n_layer):
@@ -326,8 +346,6 @@ def model_fn(features,labels,mode,params):
     FLAGS.beam_alpha, FLAGS.max_decode_length, EOS_ID, padded_decode=FLAGS.use_tpu)
     top_decoded_ids = decoded_ids[:, 0, 1:]
     top_scores = scores[:, 0]
-    print(decoded_ids.shape)
-    print(top_scores.shape)
 
     scaffold_fn = init_from_checkpoint_scaffold()
     spec = tf.contrib.tpu.TPUEstimatorSpec(
@@ -429,7 +447,13 @@ def get_input_fn(lines):
     preprocessor = get_preprocessor(lines,tokenize_fn)
     dataset = get_input_dataset(preprocessor,batch_size=params['batch_size'])
     return dataset
-  
+
+  def tpu_input_fn(params):
+    return get_tpu_input_dataset(lines,tokenize_fn,params['batch_size'])
+
+  if FLAGS.use_tpu:
+    return tpu_input_fn
+
   return input_fn
 
 def main():
@@ -487,11 +511,15 @@ def main():
     def predict(examples):
         """Given a list of texts in examples
         return the result"""
-
         input_fn = get_input_fn(examples)
         result = estimator.predict(input_fn=input_fn)
+        i=0
         for res in result:
           yield res['top_ids'],res['top_scores']
+          i+=1
+          if i==len(examples):
+            # TPU uses more examples for filling the batch
+            break
 
     if FLAGS.interactive:
         tf.logging.info("Interactive flag received."

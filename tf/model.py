@@ -566,7 +566,6 @@ def _cache_mem(curr_out, prev_mem, mem_len=None):
   else:
     new_mem = tf.concat([prev_mem, curr_out], 0)[- mem_len:]
   
-
   return tf.stop_gradient(new_mem)
 
 def transformer(dec_inp, target, mems, n_token, n_layer, d_model, d_embed,
@@ -695,7 +694,7 @@ def transformer(dec_inp, target, mems, n_token, n_layer, d_model, d_embed,
           target_mask=target_mask,
           tgt_len=tgt_len,
           qlen=qlen)
-    
+
     new_mems.append(_cache_mem(input_mask, mems[-1], mem_len))
 
     return maybe_loss_or_logit, new_mems

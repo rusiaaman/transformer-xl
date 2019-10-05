@@ -208,7 +208,6 @@ class SequenceBeamSearch(object):
         _StateKeys.FINISHED_SCORES: finished_scores,
         _StateKeys.FINISHED_FLAGS: finished_flags
     }
-    print(state)
 
     # Create state invariants for each value in the state dictionary. Each
     # dimension must be a constant or None. A None dimension means either:
@@ -226,7 +225,7 @@ class SequenceBeamSearch(object):
           _StateKeys.ALIVE_LOG_PROBS:
               tf.TensorShape([self.batch_size, self.beam_size]),
           _StateKeys.ALIVE_CACHE:
-          nest.map_structure(lambda x: tf.TensorShape([None]*len(x.shape)), alive_cache),
+              nest.map_structure(_get_shape, alive_cache),
           _StateKeys.FINISHED_SEQ:
               tf.TensorShape(
                   [self.batch_size, self.beam_size,
@@ -245,7 +244,7 @@ class SequenceBeamSearch(object):
           _StateKeys.ALIVE_LOG_PROBS:
               tf.TensorShape([None, self.beam_size]),
           _StateKeys.ALIVE_CACHE:
-          nest.map_structure(lambda x: tf.TensorShape([None]*len(x.shape)), alive_cache),
+              nest.map_structure(_get_shape_no_keep, alive_cache),
           _StateKeys.FINISHED_SEQ:
               tf.TensorShape([None, self.beam_size, None]),
           _StateKeys.FINISHED_SCORES:
@@ -577,15 +576,13 @@ def _shape_list(tensor):
   return shape
 
 
-def _get_shape_keep_last_dim(tensor):
+def _get_shape_no_keep(tensor):
   shape_list = _shape_list(tensor)
 
   # Only the last
-  for i in range(len(shape_list) - 1):
+  for i in range(len(shape_list)):
     shape_list[i] = None
 
-  if isinstance(shape_list[-1], tf.Tensor):
-    shape_list[-1] = None
   return tf.TensorShape(shape_list)
 
 
