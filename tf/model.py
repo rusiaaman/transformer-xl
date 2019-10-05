@@ -565,6 +565,7 @@ def _cache_mem(curr_out, prev_mem, mem_len=None):
     return prev_mem
   else:
     new_mem = tf.concat([prev_mem, curr_out], 0)[- mem_len:]
+  
 
   return tf.stop_gradient(new_mem)
 

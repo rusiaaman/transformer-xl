@@ -169,7 +169,8 @@ def get_input_dataset(preprocessor,batch_size):
 
     dataset = tf.data.Dataset.from_generator(preprocessor,
                                              output_types={'input':tf.int32,
-                                             'input_mask':tf.float32})
+                                             'input_mask':tf.float32},
+                                             output_shapes={'input':tf.TensorShape((FLAGS.seq_len,)), 'input_mask':tf.TensorShape((FLAGS.seq_len, ))})
     dataset = dataset.batch(batch_size,
                             drop_remainder=False)
     dataset.prefetch(1)
@@ -253,6 +254,24 @@ def get_logits(input_ids,mems,input_mask,target_mask):
     return logits,new_mems
 
 
+def cache_fn(batch_size):
+    mem_len = FLAGS.seq_len+FLAGS.max_decode_length
+    mems = []
+    for l in range(FLAGS.n_layer):
+      if mem_len > 0:
+        mems.append(
+          tf.zeros([mem_len, batch_size, FLAGS.d_model], dtype=tf.float32))
+      else:
+        mems.append(tf.zeros([mem_len], dtype=tf.float32))
+    # for mem_mask
+    if mem_len > 0:
+      mems.append(tf.zeros([mem_len, batch_size], dtype=tf.float32))
+    else:
+      mems.append(tf.zeros([mem_len], dtype=tf.float32))
+
+    return mems
+
+
 def model_fn(features,labels,mode,params):
     """Gets features and
     return predicted tokens)
@@ -269,7 +288,8 @@ def model_fn(features,labels,mode,params):
     # Calculating hidden states of inputs and getting latest logit
     input_mask = features['input_mask']
     target_mask = tf.ones((tf.shape(input_tensor)[0],1))
-    _,mems = get_logits(input_tensor,mems=None,input_mask=input_mask,
+    mems = cache_fn(tf.shape(input_mask)[0])
+    _,mems = get_logits(input_tensor,mems=mems,input_mask=input_mask,
                              target_mask=target_mask)
 
         
@@ -303,9 +323,11 @@ def model_fn(features,labels,mode,params):
 
     decoded_ids, scores = beam_search.sequence_beam_search(
     symbols_to_logits_fn, initial_ids, mems, FLAGS.n_token, FLAGS.beam_size,
-    FLAGS.beam_alpha, FLAGS.max_decode_length, EOS_ID)
+    FLAGS.beam_alpha, FLAGS.max_decode_length, EOS_ID, padded_decode=FLAGS.use_tpu)
     top_decoded_ids = decoded_ids[:, 0, 1:]
     top_scores = scores[:, 0]
+    print(decoded_ids.shape)
+    print(top_scores.shape)
 
     scaffold_fn = init_from_checkpoint_scaffold()
     spec = tf.contrib.tpu.TPUEstimatorSpec(
@@ -459,6 +481,7 @@ def main():
         model_fn=model_fn,
         use_tpu=FLAGS.use_tpu,
         config=run_config,
+        train_batch_size=FLAGS.batch_size,
         predict_batch_size=FLAGS.batch_size)
 
     def predict(examples):

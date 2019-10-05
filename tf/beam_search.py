@@ -208,6 +208,7 @@ class SequenceBeamSearch(object):
         _StateKeys.FINISHED_SCORES: finished_scores,
         _StateKeys.FINISHED_FLAGS: finished_flags
     }
+    print(state)
 
     # Create state invariants for each value in the state dictionary. Each
     # dimension must be a constant or None. A None dimension means either:
@@ -225,7 +226,7 @@ class SequenceBeamSearch(object):
           _StateKeys.ALIVE_LOG_PROBS:
               tf.TensorShape([self.batch_size, self.beam_size]),
           _StateKeys.ALIVE_CACHE:
-              nest.map_structure(_get_shape, alive_cache),
+          nest.map_structure(lambda x: tf.TensorShape([None]*len(x.shape)), alive_cache),
           _StateKeys.FINISHED_SEQ:
               tf.TensorShape(
                   [self.batch_size, self.beam_size,
@@ -244,7 +245,7 @@ class SequenceBeamSearch(object):
           _StateKeys.ALIVE_LOG_PROBS:
               tf.TensorShape([None, self.beam_size]),
           _StateKeys.ALIVE_CACHE:
-              nest.map_structure(_get_shape_keep_last_dim, alive_cache),
+          nest.map_structure(lambda x: tf.TensorShape([None]*len(x.shape)), alive_cache),
           _StateKeys.FINISHED_SEQ:
               tf.TensorShape([None, self.beam_size, None]),
           _StateKeys.FINISHED_SCORES:
