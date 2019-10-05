@@ -40,6 +40,32 @@ ENG_ID = special_symbols["<eng>"]
 PAD_ID = special_symbols["<pad>"]
 
 parser = argparse.ArgumentParser()
+
+# TPU parameters
+parser.add_argument("--master", default=None,
+                    help="master", type=str)
+parser.add_argument("--tpu", default=None,
+      help="The Cloud TPU to use for training. This should be either the name "
+      "used when creating the Cloud TPU, or a grpc://ip.address.of.tpu:8470 url.",
+      type=str)
+parser.add_argument("--gcp_project", default=None,
+      help="Project name for the Cloud TPU-enabled project. If not specified, "
+      "we will attempt to automatically detect the GCE project from metadata.",
+      type=str)
+parser.add_argument("--tpu_zone",default=None,
+      help="GCE zone where the Cloud TPU is located in. If not specified, we "
+      "will attempt to automatically detect the GCE project from metadata.",
+      type=str)
+parser.add_argument("--use_tpu", action='store_true',
+      help="Use TPUs rather than plain CPUs.")
+parser.add_argument("--num_hosts", default=1,
+      help="number of TPU hosts", type=int)
+parser.add_argument("--num_core_per_host", default=8,
+      help="number of cores per host",type=int)
+parser.add_argument("--iterations", default=500,
+      help="Number of iterations per repeat loop for TPU.")
+
+
 # Model
 parser.add_argument("--n_layer", default=6, type=int,
       help="Number of layers.")
@@ -82,7 +108,6 @@ parser.add_argument("--input_file", default="",
 # prediction
 parser.add_argument(
     "--interactive",
-    default=False,
     help="Flag for interactive prediction through command line",
     action='store_true')
 parser.add_argument("--beam_size",default=4,type=int,
@@ -105,6 +130,9 @@ parser.add_argument("--tgt_lang", default='hindi',
                     help="Target lang english/hindi.")
 
 FLAGS = parser.parse_args()
+# Warning: global variable
+sp = spm.SentencePieceProcessor()
+sp.Load(FLAGS.spiece_model_file)
 
 
 def get_preprocessor(examples, tokenize_fn):
@@ -136,9 +164,8 @@ def get_preprocessor(examples, tokenize_fn):
     return generator
 
 
-def get_input_dataset(preprocessor):
+def get_input_dataset(preprocessor,batch_size):
     """Returns tf.data.Dataset for input"""
-    batch_size = FLAGS.batch_size
 
     dataset = tf.data.Dataset.from_generator(preprocessor,
                                              output_types={'input':tf.int32,
@@ -226,7 +253,7 @@ def get_logits(input_ids,mems,input_mask,target_mask):
     return logits,new_mems
 
 
-def prediction_graph():
+def model_fn(features,labels,mode,params):
     """Gets features and
     return predicted tokens)
     features: Dict[str:tf.train.features] Contains following features:
@@ -235,14 +262,7 @@ def prediction_graph():
               input_mask
     """
 
-
-    features = {
-        "input": tf.placeholder(tf.int32, (None, None)),
-        "input_mask":  tf.placeholder(tf.float32, (None, None))
-    }
-    # features = {"input":tf.constant([[231,512,44,22]],tf.int32),
-    #             "input_mask":tf.constant([[1,1,1,1]],tf.float32)}
-
+    assert mode==tf.estimator.ModeKeys.PREDICT, "Only PREDICT mode supported"
     batch_size = tf.shape(features['input'])[0]
     input_tensor = features['input']
 
@@ -286,8 +306,22 @@ def prediction_graph():
     FLAGS.beam_alpha, FLAGS.max_decode_length, EOS_ID)
     top_decoded_ids = decoded_ids[:, 0, 1:]
     top_scores = scores[:, 0]
-    return (top_decoded_ids, top_scores), features
 
+    scaffold_fn = init_from_checkpoint_scaffold()
+    spec = tf.contrib.tpu.TPUEstimatorSpec(
+        mode=mode,
+        predictions={
+          "top_ids":top_decoded_ids,
+          "top_scores":top_scores
+          },
+        scaffold_fn=scaffold_fn
+        )
+
+
+    return spec
+
+
+             
 
 def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
   """Compute the union of the current variables and checkpoint variables."""
@@ -317,9 +351,10 @@ def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
 
   return (assignment_map, initialized_variable_names)
 
-def init_from_checkpoint(FLAGS, global_vars=False):
+def init_from_checkpoint_scaffold(global_vars=False):
   tvars = tf.global_variables() if global_vars else tf.trainable_variables()
   initialized_variable_names = {}
+  scaffold_fn = None
   if FLAGS.init_checkpoint is not None:
     if FLAGS.init_checkpoint.endswith("latest"):
       ckpt_dir = os.path.dirname(FLAGS.init_checkpoint)
@@ -331,7 +366,14 @@ def init_from_checkpoint(FLAGS, global_vars=False):
 
     (assignment_map, initialized_variable_names
     ) = get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-    tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+    if FLAGS.use_tpu:
+      def tpu_scaffold():
+        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+        return tf.train.Scaffold()
+
+      scaffold_fn = tpu_scaffold
+    else:
+      tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
     # Log customized initialization
     tf.logging.info("**** Global Variables ****")
@@ -341,6 +383,7 @@ def init_from_checkpoint(FLAGS, global_vars=False):
         init_string = ", *INIT_FROM_CKPT*"
       tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
                       init_string)
+  return scaffold_fn
 
 def transliterate_back(text,lang):
   # English return as it is
@@ -351,22 +394,26 @@ def transliterate_back(text,lang):
   from cltk.corpus.sanskrit.itrans.unicode_transliterate import ItransTransliterator as its
   return its.from_itrans(text,'hi')
 
+def get_input_fn(lines):
+
+  def tokenize_fn(text):
+      text = preprocess_text(text, lower=FLAGS.uncased)
+      text = encode_ids(sp, text,
+                         transliterate=FLAGS.transliterate, language_tag=True,
+                         eng_id=ENG_ID, hin_id=HIN_ID)
+      return text
+
+  def input_fn(params):
+    preprocessor = get_preprocessor(lines,tokenize_fn)
+    dataset = get_input_dataset(preprocessor,batch_size=params['batch_size'])
+    return dataset
+  
+  return input_fn
 
 def main():
     """Main function routine"""
 
-    tf.logging.set_verbosity(tf.logging.INFO)
-
-    # Text encoding
-    sp = spm.SentencePieceProcessor()
-    sp.Load(FLAGS.spiece_model_file)
-
-    def tokenize_fn(text):
-        text = preprocess_text(text, lower=FLAGS.uncased)
-        text = encode_ids(sp, text,
-                           transliterate=FLAGS.transliterate, language_tag=True,
-                           eng_id=ENG_ID, hin_id=HIN_ID)
-        return text
+    tf.logging.set_verbosity(tf.logging.INFO)    
 
 
     to_special_symbol = {v:k for k,v in special_symbols.items()}
@@ -386,66 +433,75 @@ def main():
 
         return sent
 
-    predictions, features = prediction_graph()
     gpu_options = tf.GPUOptions(allow_growth=True)
-    init_from_checkpoint(FLAGS, global_vars=False)
 
-    with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
-                                          gpu_options=gpu_options)) as sess:
-        sess.run(tf.global_variables_initializer())
+    session_config=tf.ConfigProto(allow_soft_placement=True,
+                                  gpu_options=gpu_options,
+                                  log_device_placement=True)
 
-        def predict(examples):
-            """Given a list of texts in examples
-            return the result"""
-            preprocessor = get_preprocessor(examples,
-                                            tokenize_fn)
-            dataset = get_input_dataset(preprocessor)
-            example = dataset.make_one_shot_iterator().get_next()
+    # TPU Configuration
+    if FLAGS.use_tpu:
+      tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
+          FLAGS.tpu, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
+    else:
+      tpu_cluster_resolver = None
+    per_host_input = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
+    run_config = tf.contrib.tpu.RunConfig(
+      cluster=tpu_cluster_resolver,
+      session_config=session_config,
+      tpu_config=tf.contrib.tpu.TPUConfig(
+      iterations_per_loop=FLAGS.iterations,
+      num_shards=FLAGS.num_core_per_host * FLAGS.num_hosts,
+      per_host_input_for_training=per_host_input),
+     )
+    # TPU Estimator
+    estimator = tf.contrib.tpu.TPUEstimator(
+        model_fn=model_fn,
+        use_tpu=FLAGS.use_tpu,
+        config=run_config,
+        predict_batch_size=FLAGS.batch_size)
 
-            num_examples = len(examples)
-            num_batches = int(np.ceil(num_examples / FLAGS.batch_size))
+    def predict(examples):
+        """Given a list of texts in examples
+        return the result"""
 
-            for _ in tqdm(range(num_batches)):
-                inputs = sess.run(example)
-                output, conf = sess.run(
-                    predictions, feed_dict={
-                        features[k]: v for k, v in inputs.items()})
-                for _output,_conf in zip(output,conf):
-                    yield _output,_conf
+        input_fn = get_input_fn(examples)
+        result = estimator.predict(input_fn=input_fn)
+        for res in result:
+          yield res['top_ids'],res['top_scores']
 
-        if FLAGS.interactive:
-            tf.logging.info("Interactive flag received."
-                            " Ignoring input files if any.")
-            while True:
-                text = input("----PROMPT----\n")
-                outputs = predict([text])
-                output = next(outputs)
-                out = parse_ids(output[0].tolist())
-                print("======Translation======")
-                print(out)
-                print("=====================")
-        else:
-            assert FLAGS.input_file!="", "Please provide either an"\
-            " input file or set interactive flag for command line input"
-            assert os.path.exists(FLAGS.input_file), FLAGS.input_file+\
-            " does not exists"
+    if FLAGS.interactive:
+        tf.logging.info("Interactive flag received."
+                        " Ignoring input files if any.")
+        while True:
+            text = input("----PROMPT----\n")
+            outputs = predict([text])
+            print(outputs)
+            output = next(outputs)
+            out = parse_ids(output[0].tolist())
+            print("======Translation======")
+            print(out)
+            print("=====================")
+    else:
+        assert FLAGS.input_file!="", "Please provide either an"\
+        " input file or set interactive flag for command line input"
+        assert os.path.exists(FLAGS.input_file), FLAGS.input_file+\
+        " does not exists"
 
-            with open(FLAGS.input_file) as f:
-                texts = []
-                for line in f:
-                    texts.append(line.strip())
+        with open(FLAGS.input_file) as f:
+            texts = []
+            for line in f:
+                texts.append(line.strip())
 
-            tf.logging.info("Got %s lines in the input file",
-                            len(texts))
-            outputs = predict(texts)
-            with open(os.path.join(FLAGS.input_file+".xlnet"),'w') as f:
-                for i in range(0,len(texts)):
-                    output,_ = next(outputs)
-                    out = parse_ids(output.tolist())
-                    f.write(out+'\n')
+        tf.logging.info("Got %s lines in the input file",
+                        len(texts))
+        outputs = predict(texts)
+        with open(os.path.join(FLAGS.input_file+".xlnet"),'w') as f:
+            for i in range(0,len(texts)):
+                output,_ = next(outputs)
+                out = parse_ids(output.tolist())
+                f.write(out+'\n')
 # Fixed flags
-FLAGS.use_tpu = False
-FLAGS.use_bfloat16 = False
 FLAGS.dropout = 0
 FLAGS.dropatt = 0
 FLAGS.init = "normal"
