@@ -521,9 +521,9 @@ if __name__ == "__main__":
   flags.DEFINE_integer("num_task", 1, help="Number of total tasks.")
   flags.DEFINE_integer("task", 0, help="The Task ID. This value is used when "
                        "using multiple workers to identify each worker.")
-  flags.DEFINE_bool("transliterate", True,
+  flags.DEFINE_bool("transliterate", False,
                     help="Transliterate to hindi.")
-  flags.DEFINE_bool("language_tag", True,
+  flags.DEFINE_bool("language_tag", False,
                     help="Use language special symbol.")
   flags.DEFINE_string("src_file", 'IITB.en-hi.hi',
                     help="Source language file.")
